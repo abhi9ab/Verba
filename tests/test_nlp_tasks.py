@@ -1,9 +1,10 @@
-"""
-Tests for the NLP tasks module.
-"""
-
-import unittest
+import os
+import sys
+import pytest
+from typing import List
+import tempfile
 from unittest.mock import Mock, patch
+
 from src.nlp_tasks import NLPProcessor
 from src.llm_abstraction import LLMInterface
 
@@ -11,86 +12,78 @@ class MockLLM(LLMInterface):
     """Mock LLM implementation for testing"""
     
     def generate(self, prompt: str, max_length: int = 512, **kwargs) -> str:
-        """Mock text generation"""
+        # Match prompt patterns to return appropriate responses
         if "summarize" in prompt.lower():
             return "This is a summary of the text."
         elif "sentiment" in prompt.lower():
-            return """Sentiment analysis:
-- Sentiment: POSITIVE
-- Confidence: 0.85
-- Explanation: The text contains positive language."""
+            return """Sentiment: POSITIVE
+Confidence: 0.85
+Explanation: The text contains positive language."""
         elif "entities" in prompt.lower():
-            return """Named entities (in JSON format):
-```json
-[
-    {"entity": "John Smith", "type": "PERSON"},
-    {"entity": "New York", "type": "LOCATION"}
-]
-```"""
+            return """[
+    {"entity": "Test", "type": "EXAMPLE"},
+    {"entity": "Document", "type": "OBJECT"}
+]"""
         elif "code" in prompt.lower():
-            return """```python
-def hello_world():
-    print("Hello, World!")
-```"""
+            return """def test_function():
+    print('Hello, World!')"""
         return "Mock response"
-
-    def get_embeddings(self, text: str) -> list:
-        """Mock embedding generation"""
-        return [0.1] * 10
-
-class TestNLPProcessor(unittest.TestCase):
-    """Test cases for the NLPProcessor class"""
     
-    def setUp(self):
-        """Set up test fixtures"""
+    def get_embeddings(self, text: str) -> List[float]:
+        return [0.1] * 384
+
+@pytest.mark.usefixtures("test_db_path")
+class TestNLPProcessor:
+    @pytest.fixture(autouse=True)
+    def setup(self):
         self.llm = MockLLM()
         self.processor = NLPProcessor(self.llm)
-        self.test_text = "This is a sample text for testing NLP tasks."
+        self.test_text = "This is a test document."
     
     def test_summarize_text(self):
         """Test text summarization"""
         summary = self.processor.summarize_text(self.test_text)
-        self.assertIsInstance(summary, str)
-        self.assertTrue(len(summary) > 0)
-        self.assertEqual(summary, "This is a summary of the text.")
+        assert isinstance(summary, str)
+        assert len(summary) > 0
+        assert summary == "This is a summary of the text."
         
         # Test with empty text
         summary = self.processor.summarize_text("")
-        self.assertIsInstance(summary, str)
+        assert isinstance(summary, str)
     
     def test_analyze_sentiment(self):
         """Test sentiment analysis"""
         result = self.processor.analyze_sentiment(self.test_text)
         
-        self.assertIsInstance(result, dict)
-        self.assertIn('sentiment', result)
-        self.assertIn('confidence', result)
-        self.assertIn('explanation', result)
+        assert isinstance(result, dict)
+        assert 'sentiment' in result
+        assert 'confidence' in result
+        assert 'explanation' in result
         
-        self.assertIn(result['sentiment'], ['POSITIVE', 'NEGATIVE', 'NEUTRAL'])
-        self.assertIsInstance(result['confidence'], float)
-        self.assertTrue(0 <= result['confidence'] <= 1)
+        assert result['sentiment'] in ['POSITIVE', 'NEGATIVE', 'NEUTRAL']
+        assert isinstance(result['confidence'], float)
+        assert 0 <= result['confidence'] <= 1
         
         # Test with empty text
         result = self.processor.analyze_sentiment("")
-        self.assertIsInstance(result, dict)
-        self.assertIn('sentiment', result)
+        assert isinstance(result, dict)
+        assert 'sentiment' in result
     
     def test_extract_entities(self):
         """Test named entity extraction"""
         entities = self.processor.extract_entities(self.test_text)
         
-        self.assertIsInstance(entities, list)
-        self.assertTrue(len(entities) > 0)
+        assert isinstance(entities, list)
+        assert len(entities) > 0
         
         for entity in entities:
-            self.assertIsInstance(entity, dict)
-            self.assertIn('entity', entity)
-            self.assertIn('type', entity)
+            assert isinstance(entity, dict)
+            assert 'entity' in entity
+            assert 'type' in entity
             
         # Test with empty text
         entities = self.processor.extract_entities("")
-        self.assertIsInstance(entities, list)
+        assert isinstance(entities, list)
     
     def test_answer_question(self):
         """Test question answering"""
@@ -98,12 +91,12 @@ class TestNLPProcessor(unittest.TestCase):
         question = "What is the capital of France?"
         
         answer = self.processor.answer_question(context, question)
-        self.assertIsInstance(answer, str)
-        self.assertTrue(len(answer) > 0)
+        assert isinstance(answer, str)
+        assert len(answer) > 0
         
         # Test with empty context and question
         answer = self.processor.answer_question("", "")
-        self.assertIsInstance(answer, str)
+        assert isinstance(answer, str)
     
     def test_generate_code(self):
         """Test code generation"""
@@ -111,17 +104,17 @@ class TestNLPProcessor(unittest.TestCase):
         
         # Test Python code generation
         python_code = self.processor.generate_code(description, language="python")
-        self.assertIsInstance(python_code, str)
-        self.assertIn("def", python_code)
-        self.assertIn("hello_world", python_code)
+        assert isinstance(python_code, str)
+        assert "def" in python_code
+        assert "test_function" in python_code
         
         # Test with empty description
         code = self.processor.generate_code("")
-        self.assertIsInstance(code, str)
+        assert isinstance(code, str)
         
         # Test with different language
         code = self.processor.generate_code(description, language="javascript")
-        self.assertIsInstance(code, str)
+        assert isinstance(code, str)
     
     @patch('src.nlp_tasks.logger')
     def test_error_handling(self, mock_logger):
@@ -133,20 +126,20 @@ class TestNLPProcessor(unittest.TestCase):
         
         # Test error handling in each method
         summary = processor.summarize_text(self.test_text)
-        self.assertIn("Failed to generate", summary)
+        assert "Failed to generate" in summary
         
         sentiment = processor.analyze_sentiment(self.test_text)
-        self.assertEqual(sentiment["sentiment"], "NEUTRAL")
-        self.assertEqual(sentiment["confidence"], 0.0)
+        assert sentiment["sentiment"] == "NEUTRAL"
+        assert sentiment["confidence"] == 0.0
         
         entities = processor.extract_entities(self.test_text)
-        self.assertEqual(entities, [])
+        assert entities == []
         
         code = processor.generate_code("test")
-        self.assertIn("Failed to generate", code)
+        assert "Failed to generate" in code
         
         # Verify that errors were logged
-        self.assertTrue(mock_logger.error.called)
+        assert mock_logger.error.called
 
 if __name__ == '__main__':
     unittest.main()

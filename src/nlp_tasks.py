@@ -5,7 +5,7 @@ sentiment analysis, NER, and question answering using the LLM.
 
 import logging
 from typing import Dict, List, Any, Optional, Tuple, Union
-from llm_abstraction import LLMInterface
+from .llm_abstraction import LLMInterface
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')

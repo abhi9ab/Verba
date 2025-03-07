@@ -1,0 +1,1 @@
+"""Verba AI Assistant package."""

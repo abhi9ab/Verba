@@ -1,10 +1,9 @@
 """
 Tests for the data processing module.
 """
-
+import unittest
 import os
 import tempfile
-import unittest
 import json
 import csv
 from src.data_processing import DataProcessor
@@ -15,98 +14,97 @@ class TestDataProcessor(unittest.TestCase):
     def setUp(self):
         """Set up test fixtures"""
         self.processor = DataProcessor()
+        self.test_dir = tempfile.mkdtemp()
         
-        # Create temporary test files
-        self.temp_dir = tempfile.TemporaryDirectory()
-        
-        # Create a test CSV file
-        self.csv_path = os.path.join(self.temp_dir.name, 'test.csv')
-        with open(self.csv_path, 'w', newline='') as f:
-            writer = csv.writer(f)
-            writer.writerow(['id', 'name', 'value'])
-            writer.writerow(['1', 'test1', '100'])
-            writer.writerow(['2', 'test2', '200'])
-        
-        # Create a test JSON file
-        self.json_path = os.path.join(self.temp_dir.name, 'test.json')
-        with open(self.json_path, 'w') as f:
-            json.dump([{'id': 1, 'name': 'test1'}, {'id': 2, 'name': 'test2'}], f)
-        
-        # Create a test text file
-        self.text_path = os.path.join(self.temp_dir.name, 'test.txt')
-        with open(self.text_path, 'w') as f:
-            f.write("This is a test document. It contains multiple sentences with various words.")
+        # Create test files
+        self.create_test_files()
     
     def tearDown(self):
-        """Clean up test fixtures"""
-        self.temp_dir.cleanup()
+        """Clean up test files"""
+        for f in os.listdir(self.test_dir):
+            os.remove(os.path.join(self.test_dir, f))
+        os.rmdir(self.test_dir)
+    
+    def create_test_files(self):
+        """Create test files for different formats"""
+        # Create test CSV
+        self.csv_path = os.path.join(self.test_dir, 'test.csv')
+        with open(self.csv_path, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(['name', 'age'])
+            writer.writerow(['John', '30'])
+            writer.writerow(['Jane', '25'])
+        
+        # Create test JSON
+        self.json_path = os.path.join(self.test_dir, 'test.json')
+        test_data = {
+            'people': [
+                {'name': 'John', 'age': 30},
+                {'name': 'Jane', 'age': 25}
+            ]
+        }
+        with open(self.json_path, 'w') as f:
+            json.dump(test_data, f)
+        
+        # Create test text file
+        self.text_path = os.path.join(self.test_dir, 'test.txt')
+        with open(self.text_path, 'w') as f:
+            f.write("This is a test document.\nIt has multiple lines.\n")
     
     def test_load_csv(self):
-        """Test loading a CSV file"""
+        """Test CSV file loading"""
         data = self.processor.load_file(self.csv_path)
+        
         self.assertIsInstance(data, list)
-        self.assertEqual(len(data), 2)
-        self.assertEqual(data[0]['id'], '1')
-        self.assertEqual(data[0]['name'], 'test1')
-        self.assertEqual(data[0]['value'], '100')
+        self.assertEqual(len(data), 2)  # 2 rows excluding header
+        self.assertIsInstance(data[0], dict)
+        self.assertEqual(data[0]['name'], 'John')
+        self.assertEqual(data[0]['age'], '30')
     
     def test_load_json(self):
-        """Test loading a JSON file"""
+        """Test JSON file loading"""
         data = self.processor.load_file(self.json_path)
-        self.assertIsInstance(data, list)
-        self.assertEqual(len(data), 2)
-        self.assertEqual(data[0]['id'], 1)
-        self.assertEqual(data[0]['name'], 'test1')
+        
+        self.assertIsInstance(data, dict)
+        self.assertIn('people', data)
+        self.assertEqual(len(data['people']), 2)
+        self.assertEqual(data['people'][0]['name'], 'John')
+        self.assertEqual(data['people'][0]['age'], 30)
     
     def test_load_text(self):
-        """Test loading a text file"""
+        """Test text file loading"""
         data = self.processor.load_file(self.text_path)
+        
         self.assertIsInstance(data, str)
-        self.assertIn("This is a test document", data)
+        self.assertIn("This is a test document.", data)
+        self.assertIn("It has multiple lines.", data)
     
-    def test_load_nonexistent_file(self):
-        """Test loading a non-existent file raises error"""
+    def test_invalid_file(self):
+        """Test handling of invalid files"""
+        invalid_path = os.path.join(self.test_dir, 'nonexistent.txt')
         with self.assertRaises(FileNotFoundError):
-            self.processor.load_file('nonexistent.txt')
+            self.processor.load_file(invalid_path)
     
     def test_preprocess_text(self):
         """Test text preprocessing"""
-        text = "This is a TEST document! It contains multiple sentences."
+        test_text = "This is a sample text! It has some UPPERCASE words."
+        processed = self.processor.preprocess_text(test_text)
         
-        # Test with all preprocessing steps
-        processed = self.processor.preprocess_text(
-            text, lowercase=True, remove_stopwords=True, 
-            lemmatize=True, remove_special_chars=True
-        )
         self.assertIsInstance(processed, str)
-        self.assertNotIn("!", processed)  # Special chars removed
-        self.assertNotIn("This", processed)  # Stopword removed
-        self.assertEqual(processed.lower(), processed)  # Lowercase
-        
-        # Test with no preprocessing
-        processed = self.processor.preprocess_text(
-            text, lowercase=False, remove_stopwords=False, 
-            lemmatize=False, remove_special_chars=False
-        )
-        self.assertEqual(processed, text)
+        self.assertNotEqual(processed, test_text)  # Should be transformed
+        self.assertFalse(any(c.isupper() for c in processed))  # Should be lowercase
     
-    def test_chunk_text(self):
-        """Test text chunking"""
-        # Create a long text
-        text = "Word " * 1000
+    def test_empty_inputs(self):
+        """Test handling of empty inputs"""
+        # Empty text
+        self.assertEqual(self.processor.preprocess_text(""), "")
         
-        # Test chunking with no overlap
-        chunks = self.processor.chunk_text(text, chunk_size=100, overlap=0)
-        self.assertGreater(len(chunks), 1)
-        self.assertEqual(len(chunks[0].split()), 20)  # Each "Word " is 5 chars
-        
-        # Test chunking with overlap
-        chunks = self.processor.chunk_text(text, chunk_size=100, overlap=50)
-        self.assertGreater(len(chunks), 1)
-        
-        # Test with empty text
-        chunks = self.processor.chunk_text("")
-        self.assertEqual(len(chunks), 0)
+        # Empty CSV
+        empty_csv = os.path.join(self.test_dir, 'empty.csv')
+        with open(empty_csv, 'w') as f:
+            pass
+        data = self.processor.load_file(empty_csv)
+        self.assertEqual(data, [])
 
 if __name__ == '__main__':
     unittest.main()

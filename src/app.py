@@ -1,329 +1,313 @@
-"""
-Streamlit application for the AI assistant.
-"""
-
+"""Streamlit application for the AI assistant."""
 import os
 import logging
-import time
 import streamlit as st
+import nltk
 from typing import Dict, List, Any, Optional
 
-from llm_abstraction import LLMFactory
-from data_processing import DataProcessor
-from nlp_tasks import NLPProcessor
-from retrieval import RAGSystem
+from .llm_abstraction import LLMFactory, LLMInterface
+from .data_processing import DataProcessor
+from .nlp_tasks import NLPProcessor
+from .retrieval import RAGSystem
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Set page configuration
 st.set_page_config(
-    page_title="Multi-Functional AI Assistant",
+    page_title="Verba AI Assistant",
     page_icon="🤖",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Application state
+# Download required NLTK data
+@st.cache_resource
+def download_nltk_data():
+    """Download required NLTK data"""
+    try:
+        nltk.download('punkt')
+        nltk.download('averaged_perceptron_tagger')
+        nltk.download('maxent_ne_chunker')
+        nltk.download('words')
+        return True
+    except Exception as e:
+        logger.error(f"Error downloading NLTK data: {str(e)}")
+        return False
+
 @st.cache_resource
 def initialize_components():
-    """Initialize and cache the core components of the application"""
-    # Initialize LLM
+    """Initialize and cache the core components"""
+    # Download NLTK data first
+    if not download_nltk_data():
+        st.error("Failed to download required NLTK data")
+        st.stop()
     llm_config = {
-        'model_name': os.environ.get('LLM_MODEL', 'google/gemma-2b'),
-        'embedding_model': os.environ.get('EMBEDDING_MODEL', 'sentence-transformers/all-MiniLM-L6-v2')
+        'model_name': 'gemini-1.5-flash-8b',
+        'embedding_model': 'models/embedding-001',
+        'temperature': 0.7,
+        'top_p': 0.9,
+        'top_k': 40
     }
-    llm = LLMFactory.create_llm("huggingface", llm_config)
     
-    # Initialize other components
-    data_processor = DataProcessor()
-    nlp_processor = NLPProcessor(llm)
-    
-    # Initialize RAG system with persistence
-    persist_dir = os.environ.get('CHROMA_PERSIST_DIR', './.chroma_db')
-    rag_system = RAGSystem(llm, persist_directory=persist_dir)
-    
-    return {
-        "llm": llm,
-        "data_processor": data_processor,
-        "nlp_processor": nlp_processor,
-        "rag_system": rag_system
-    }
+    try:
+        # Check for required environment variables
+        api_key = os.getenv('GOOGLE_API_KEY')
+        if not api_key:
+            st.error("Google API key not found. Please set the GOOGLE_API_KEY environment variable.")
+            st.stop()
+            
+        persist_dir = os.environ.get('CHROMA_PERSIST_DIR', os.path.join(os.getcwd(), ".chroma"))
+        
+        # Initialize components
+        llm = LLMFactory.create_llm("gemini", llm_config)
+        data_processor = DataProcessor()
+        nlp_processor = NLPProcessor(llm)
+        rag_system = RAGSystem(llm, persist_directory=persist_dir)
+        
+        # Verify RAG system health
+        health = rag_system.check_collection_health()
+        if health["status"] != "healthy":
+            logger.warning(f"RAG system health check failed: {health.get('error', 'unknown error')}")
+        
+        return {
+            'llm': llm,
+            'data_processor': data_processor,
+            'nlp_processor': nlp_processor,
+            'rag_system': rag_system
+        }
+    except Exception as e:
+        logger.error(f"Error initializing components: {str(e)}")
+        st.error(f"Error initializing components: {str(e)}")
+        st.stop()
 
-# Initialize session state
-def init_session_state():
-    """Initialize session state variables"""
-    if "conversation_history" not in st.session_state:
-        st.session_state.conversation_history = []
-    if "documents" not in st.session_state:
-        st.session_state.documents = []
-    if "current_persona" not in st.session_state:
-        st.session_state.current_persona = "Professional"
+def chat_interface(components: Dict[str, Any]):
+    """Simple chat interface without RAG"""
+    st.subheader("Chat with AI")
 
-# Main application
+    # Add clear history button
+    if st.sidebar.button("Clear Chat History"):
+        st.session_state.messages = []
+    
+    # Initialize chat history
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
+
+    # Display chat history
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+
+    # Accept user input
+    if prompt := st.chat_input("What would you like to know?"):
+        # Add user message to chat history
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt)
+
+        # Generate AI response
+        with st.chat_message("assistant"):
+            with st.spinner("Generating response..."):
+                response = components['llm'].generate(prompt)
+                st.markdown(response)
+                st.session_state.messages.append({
+                    "role": "assistant", 
+                    "content": response
+                })
+
+def summarize_interface(components: Dict[str, Any]):
+    """Text summarization interface with RAG support"""
+    st.subheader("Text Summarization")
+    
+    # Add document upload for summarization
+    uploaded_file = st.file_uploader(
+        "Upload a document to summarize", 
+        type=['txt', 'pdf', 'csv', 'json']
+    )
+    
+    text = ""
+    if uploaded_file:
+        try:
+            temp_path = f"temp_{uploaded_file.name}"
+            with open(temp_path, 'wb') as f:
+                f.write(uploaded_file.getvalue())
+            
+            with open(temp_path, 'r') as f:
+                text = f.read()
+            
+            os.remove(temp_path)
+            st.success("Document loaded successfully!")
+        except Exception as e:
+            st.error(f"Error loading document: {str(e)}")
+    
+    text = st.text_area("Or enter text to summarize:", value=text, height=200)
+    max_length = st.slider("Maximum summary length:", 50, 500, 200)
+    use_context = st.checkbox("Use uploaded documents for context", value=False)
+    
+    if st.button("Summarize") and text:
+        with st.spinner("Generating summary..."):
+            if use_context:
+                # Use RAG for enhanced summarization
+                prompt = f"Summarize this text in {max_length} words, using any relevant context: {text}"
+                result = components['rag_system'].augmented_generation(prompt)
+                summary = result["response"]
+                
+                st.markdown("### Summary")
+                st.write(summary)
+                
+                if result["references"]:
+                    with st.expander("Related Context"):
+                        for i, ref in enumerate(result["references"], 1):
+                            score = ref["relevance_score"]
+                            st.markdown(f"**Reference {i}** (Relevance: {score:.2%})")
+                            st.markdown(ref["text"])
+            else:
+                # Direct summarization without context
+                summary = components['nlp_processor'].summarize_text(text, max_length)
+                st.markdown("### Summary")
+                st.write(summary)
+
+def sentiment_interface(nlp: NLPProcessor):
+    """Sentiment analysis interface"""
+    st.subheader("Sentiment Analysis")
+    
+    text = st.text_area("Enter text to analyze:", height=150)
+    
+    if st.button("Analyze Sentiment") and text:
+        with st.spinner("Analyzing sentiment..."):
+            result = nlp.analyze_sentiment(text)
+            
+            st.markdown("### Results")
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("Sentiment", result["sentiment"])
+            with col2:
+                st.metric("Confidence", f"{result['confidence']:.2%}")
+            st.write("**Explanation:**", result["explanation"])
+
+def entity_interface(nlp: NLPProcessor):
+    """Named entity recognition interface"""
+    st.subheader("Named Entity Recognition")
+    
+    text = st.text_area("Enter text to analyze:", height=150)
+    
+    if st.button("Extract Entities") and text:
+        with st.spinner("Extracting entities..."):
+            entities = nlp.extract_entities(text)
+            
+            st.markdown("### Extracted Entities")
+            for entity in entities:
+                st.markdown(f"- **{entity['entity']}** ({entity['type']})")
+
+def qa_interface(components: Dict[str, Any]):
+    """Question answering interface with RAG support"""
+    st.subheader("Question Answering")
+    
+    # Add document upload for context
+    uploaded_file = st.file_uploader(
+        "Upload a document for context", 
+        type=['txt', 'pdf', 'csv', 'json']
+    )
+    
+    if uploaded_file:
+        with st.spinner("Processing document..."):
+            try:
+                temp_path = f"temp_{uploaded_file.name}"
+                with open(temp_path, 'wb') as f:
+                    f.write(uploaded_file.getvalue())
+                
+                components['rag_system'].add_documents_from_file(temp_path)
+                st.success(f"Added document to context!")
+                
+                os.remove(temp_path)
+            except Exception as e:
+                st.error(f"Error processing document: {str(e)}")
+
+    # Show context status
+    with st.sidebar:
+        try:
+            health = components['rag_system'].check_collection_health()
+            st.markdown(f"**Available Context:** {health.get('document_count', 0)} documents")
+        except Exception as e:
+            st.error(f"Error checking context: {str(e)}")
+    
+    question = st.text_input("Enter your question:")
+    use_context = st.checkbox("Use uploaded documents as context", value=True)
+    
+    if st.button("Get Answer") and question:
+        with st.spinner("Finding answer..."):
+            if use_context:
+                # Use RAG for answer generation
+                result = components['rag_system'].augmented_generation(question)
+                answer = result["response"]
+                
+                st.markdown("### Answer")
+                st.write(answer)
+                
+                if result["references"]:
+                    with st.expander("Sources"):
+                        for i, ref in enumerate(result["references"], 1):
+                            score = ref["relevance_score"]
+                            st.markdown(f"**Source {i}** (Relevance: {score:.2%})")
+                            st.markdown(ref["text"])
+            else:
+                # Use direct QA without context
+                answer = components['nlp_processor'].answer_question("", question)
+                st.markdown("### Answer")
+                st.write(answer)
+
+def code_interface(nlp: NLPProcessor):
+    """Code generation interface"""
+    st.subheader("Code Generation")
+    
+    description = st.text_area("Describe what you want the code to do:", height=100)
+    language = st.selectbox("Programming Language:", 
+                           ["python", "javascript", "java", "cpp", "rust"])
+    
+    if st.button("Generate Code") and description:
+        with st.spinner("Generating code..."):
+            code = nlp.generate_code(description, language)
+            st.markdown("### Generated Code")
+            st.code(code, language=language)
+
 def main():
     """Main application function"""
-    # Initialize components and session state
-    components = initialize_components()
-    init_session_state()
-    
-    # Sidebar
+    st.title("Verba AI Assistant 🤖")
+
     with st.sidebar:
-        st.title("🤖 AI Assistant")
-        
-        # Persona selection
-        st.subheader("Assistant Persona")
-        persona = st.radio(
-            "Select assistant persona:",
-            ["Professional", "Technical", "Casual"],
-            index=["Professional", "Technical", "Casual"].index(st.session_state.current_persona)
-        )
-        if persona != st.session_state.current_persona:
-            st.session_state.current_persona = persona
-        
-        # Document upload
-        st.subheader("Document Management")
-        uploaded_file = st.file_uploader("Upload a document:", type=["txt", "csv", "json", "md"])
-        
-        if uploaded_file is not None:
-            # Save the uploaded file temporarily
-            file_details = {"FileName": uploaded_file.name, "FileType": uploaded_file.type, "FileSize": uploaded_file.size}
-            st.write(f"File: {file_details['FileName']}")
-            
-            # Save the file to a temporary location
-            temp_file_path = f"./temp/{uploaded_file.name}"
-            os.makedirs(os.path.dirname(temp_file_path), exist_ok=True)
-            
-            with open(temp_file_path, "wb") as f:
-                f.write(uploaded_file.getbuffer())
-            
-            # Process the file if the user confirms
-            if st.button("Process Document"):
-                with st.spinner("Processing document..."):
-                    try:
-                        # Add the document to the RAG system
-                        doc_ids = components["rag_system"].add_documents_from_file(
-                            temp_file_path,
-                            metadata={"filename": uploaded_file.name}
-                        )
-                        
-                        # Update session state with new document
-                        st.session_state.documents.append({
-                            "name": uploaded_file.name,
-                            "path": temp_file_path,
-                            "ids": doc_ids
-                        })
-                        
-                        st.success(f"Document processed successfully!")
-                    except Exception as e:
-                        st.error(f"Error processing document: {str(e)}")
-        
-        # Show processed documents
-        if st.session_state.documents:
-            st.subheader("Processed Documents")
-            for doc in st.session_state.documents:
-                st.write(f"📄 {doc['name']}")
-        
-        # Feature selection
-        st.subheader("Available Features")
-        feature = st.selectbox(
-            "Select feature:",
-            ["Chat with AI", "Summarize Text", "Sentiment Analysis", "Extract Entities", "Generate Code"]
-        )
+        st.header("Configuration")
+        temperature = st.slider("Temperature", 0.0, 1.0, 0.7)
+        max_length = st.slider("Max Response Length", 100, 1000, 512)
     
-    # Main content
-    st.title("Multi-Functional AI Assistant")
-    
-    if feature == "Chat with AI":
+    # Initialize components with loading state
+    with st.spinner("Initializing AI components..."):
+        try:
+            components = initialize_components()
+        except Exception as e:
+            st.error(f"Error initializing components: {str(e)}")
+            return
+
+    # Sidebar for task selection
+    task = st.sidebar.selectbox(
+        "Select Task",
+        ["Chat", "Summarize", "Sentiment Analysis", "Entity Extraction", 
+         "Question Answering", "Code Generation"]
+    )
+
+    # Main content area
+    if task == "Chat":
         chat_interface(components)
-    elif feature == "Summarize Text":
-        summarization_interface(components)
-    elif feature == "Sentiment Analysis":
-        sentiment_analysis_interface(components)
-    elif feature == "Extract Entities":
-        entity_extraction_interface(components)
-    elif feature == "Generate Code":
-        code_generation_interface(components)
-
-def chat_interface(components):
-    """Chat interface for conversing with the AI assistant"""
-    st.header("Chat with AI")
-    
-    # Display conversation history
-    for message in st.session_state.conversation_history:
-        if message["role"] == "user":
-            st.chat_message("user").write(message["content"])
-        else:
-            st.chat_message("assistant").write(message["content"])
-    
-    # User input
-    user_input = st.chat_input("Type your message here...")
-    
-    if user_input:
-        # Add user message to history
-        st.session_state.conversation_history.append({"role": "user", "content": user_input})
-        
-        # Display user message
-        st.chat_message("user").write(user_input)
-        
-        # Generate response with persona
-        with st.chat_message("assistant"):
-            with st.spinner("Thinking..."):
-                # Prepare context from conversation history
-                context = "\n".join([
-                    f"{'User' if msg['role'] == 'user' else 'Assistant'}: {msg['content']}"
-                    for msg in st.session_state.conversation_history[-5:]  # Last 5 messages for context
-                ])
-                
-                # Get RAG-enhanced response
-                persona_prefix = ""
-                if st.session_state.current_persona == "Professional":
-                    persona_prefix = "Respond in a formal, professional tone. "
-                elif st.session_state.current_persona == "Technical":
-                    persona_prefix = "Respond with technical details and precision. "
-                elif st.session_state.current_persona == "Casual":
-                    persona_prefix = "Respond in a casual, conversational tone. "
-                
-                # Use RAG if documents are available, otherwise just the LLM
-                if st.session_state.documents:
-                    enhanced_query = f"{persona_prefix}Context: {context}\n\nUser's last message: {user_input}"
-                    result = components["rag_system"].augmented_generation(enhanced_query)
-                    response = result["response"]
-                    
-                    # Show references if available
-                    if result["references"]:
-                        response += "\n\n*Response informed by your documents*"
-                else:
-                    prompt = f"{persona_prefix}You are a helpful AI assistant. Maintain conversation context.\n\nConversation history:\n{context}\n\nUser: {user_input}\nAssistant:"
-                    response = components["llm"].generate(prompt)
-                
-                # Display the response
-                st.write(response)
-                
-                # Add assistant response to history
-                st.session_state.conversation_history.append({"role": "assistant", "content": response})
-
-def summarization_interface(components):
-    """Interface for text summarization"""
-    st.header("Text Summarization")
-    
-    text_input = st.text_area("Enter text to summarize:", height=300)
-    max_length = st.slider("Maximum summary length:", 50, 500, 200)
-    
-    if st.button("Summarize"):
-        if text_input:
-            with st.spinner("Generating summary..."):
-                summary = components["nlp_processor"].summarize_text(text_input, max_length=max_length)
-                st.subheader("Summary:")
-                st.write(summary)
-        else:
-            st.warning("Please enter some text to summarize.")
-
-def sentiment_analysis_interface(components):
-    """Interface for sentiment analysis"""
-    st.header("Sentiment Analysis")
-    
-    text_input = st.text_area("Enter text to analyze:", height=200)
-    
-    if st.button("Analyze Sentiment"):
-        if text_input:
-            with st.spinner("Analyzing sentiment..."):
-                result = components["nlp_processor"].analyze_sentiment(text_input)
-                
-                # Display results
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.subheader("Sentiment")
-                    if result["sentiment"] == "POSITIVE":
-                        st.markdown("✅ **Positive**")
-                    elif result["sentiment"] == "NEGATIVE":
-                        st.markdown("❌ **Negative**")
-                    else:
-                        st.markdown("⚖️ **Neutral**")
-                
-                with col2:
-                    st.subheader("Confidence")
-                    st.progress(result["confidence"])
-                    st.text(f"{result['confidence'] * 100:.1f}%")
-                
-                st.subheader("Explanation")
-                st.write(result["explanation"])
-        else:
-            st.warning("Please enter some text to analyze.")
-
-def entity_extraction_interface(components):
-    """Interface for named entity recognition"""
-    st.header("Named Entity Recognition")
-    
-    text_input = st.text_area("Enter text to extract entities from:", height=200)
-    
-    if st.button("Extract Entities"):
-        if text_input:
-            with st.spinner("Extracting entities..."):
-                entities = components["nlp_processor"].extract_entities(text_input)
-                
-                if entities:
-                    # Create a dataframe for better display
-                    import pandas as pd
-                    df = pd.DataFrame(entities)
-                    
-                    st.subheader("Extracted Entities")
-                    st.dataframe(df)
-                    
-                    # Highlight entities in text
-                    highlighted_text = text_input
-                    for entity in entities:
-                        if "entity" in entity and "type" in entity:
-                            # Simple highlighting using markdown
-                            highlighted_text = highlighted_text.replace(
-                                entity["entity"],
-                                f"**[{entity['entity']} ({entity['type']})]**"
-                            )
-                    
-                    st.subheader("Highlighted Text")
-                    st.markdown(highlighted_text)
-                else:
-                    st.info("No entities found in the text.")
-        else:
-            st.warning("Please enter some text to extract entities from.")
-
-def code_generation_interface(components):
-    """Interface for code generation"""
-    st.header("Code Generation")
-    
-    description = st.text_area("Describe what you want the code to do:", height=150)
-    language = st.selectbox("Programming language:", ["python", "javascript", "java", "c++", "sql"])
-    
-    if st.button("Generate Code"):
-        if description:
-            with st.spinner("Generating code..."):
-                code = components["nlp_processor"].generate_code(description, language=language)
-                
-                st.subheader("Generated Code")
-                st.code(code, language=language)
-                
-                # Add copy button (using HTML/JS)
-                st.markdown(
-                    """
-                    <script>
-                    function copyCode() {
-                        const codeBlock = document.querySelector('code');
-                        const textArea = document.createElement('textarea');
-                        textArea.value = codeBlock.textContent;
-                        document.body.appendChild(textArea);
-                        textArea.select();
-                        document.execCommand('copy');
-                        document.body.removeChild(textArea);
-                        alert('Code copied to clipboard!');
-                    }
-                    </script>
-                    <button onclick="copyCode()">Copy Code</button>
-                    """,
-                    unsafe_allow_html=True
-                )
-        else:
-            st.warning("Please describe what you want the code to do.")
+    elif task == "Summarize":
+        summarize_interface(components)
+    elif task == "Sentiment Analysis":
+        sentiment_interface(components['nlp_processor'])
+    elif task == "Entity Extraction":
+        entity_interface(components['nlp_processor'])
+    elif task == "Question Answering":
+        qa_interface(components)  # Pass all components
+    elif task == "Code Generation":
+        code_interface(components['nlp_processor'])
 
 if __name__ == "__main__":
     main()

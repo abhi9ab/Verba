@@ -1,39 +1,10 @@
 # Core dependencies
 streamlit>=1.22.0
-transformers>=4.34.0
-torch>=2.0.0
-sentence-transformers>=2.2.2
 chromadb>=0.4.18
+google-generativeai>=0.3.0
 nltk>=3.8.1
 pandas>=1.5.3
 numpy>=1.24.3
 python-dotenv>=1.0.0
 pyyaml>=6.0.1
 tqdm>=4.65.0
-scikit-learn>=1.3.0
-bitsandbytes>=0.41.1  # For model quantization
-accelerate>=0.23.0    # For model loading optimization
-
-# Testing dependencies
-pytest>=7.4.0
-pytest-cov>=4.1.0     # For test coverage reporting
-pytest-mock>=3.11.1   # For mocking in tests
-
-# Development dependencies
-black>=23.9.1         # Code formatting
-flake8>=6.1.0        # Code linting
-mypy>=1.5.1          # Type checking
-isort>=5.12.0        # Import sorting
-
-# Documentation
-sphinx>=7.1.2        # Documentation generator
-sphinx-rtd-theme>=1.3.0  # Documentation theme
-
-# Optional dependencies
-ipykernel>=6.25.2    # For Jupyter notebook support
-jupyter>=1.0.0       # For notebook development
-matplotlib>=3.8.0    # For data visualization
-plotly>=5.17.0       # For interactive visualizations
-
-# Security
-cryptography>=41.0.0  # For secure operations

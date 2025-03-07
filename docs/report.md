@@ -14,8 +14,8 @@
 
 ### 1.2 Trade-offs
 - **Model Selection**: 
-  - Chose Gemma-2B over larger models for better performance/resource balance
-  - Using 4-bit quantization sacrifices some accuracy for reduced memory usage
+  - Chose Google's Gemini API for better performance/resource balance
+  - Using API-based models reduces local resource usage
 - **Processing Pipeline**:
   - Text chunking with overlap increases storage but improves context preservation
   - Caching LLM responses trades memory for speed
@@ -31,7 +31,7 @@ def generate(self, prompt: str, max_length: int = 512) -> str:
 
 ### 2.2 Memory Management
 - Implemented text chunking for large documents
-- Used 4-bit quantization for model loading
+- Used API-based models to reduce local memory usage
 - Efficient embedding storage in ChromaDB
 
 ### 2.3 Scalability Considerations
